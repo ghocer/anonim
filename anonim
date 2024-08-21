@@ -4,10 +4,10 @@ import random
 import time
 import re
 
-API_TOKEN = '6506704429:AAFskMc5eFaPIRhga4QMT3jiNYFRzTXbyC4'
+API_TOKEN = '7367868835:AAGcG2V6KAjTLNDQfM_1V5UINS9vjyRazqw'
 bot = telebot.TeleBot(API_TOKEN)
 
-OWNER_ID = 2025849289
+OWNER_ID = 5522141822
 
 response_codes = {}
 user_states = {}
